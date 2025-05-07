@@ -129,8 +129,15 @@ class PDFTextExtractor:
         if title is None:
             title = os.path.basename(file_path)
         try:
-            search_query = {"query": {"term": {"file_path": file_path}}}
-            res = self.es.search(index=self.index_name, body=search_query, size=1000)
+            search_query = {
+                "query": {
+                    "term": {
+                        "file_path": file_path
+                    }
+                },
+                "size": 1000
+            }
+            res = self.es.search(index=self.index_name, body=search_query)
             for hit in res['hits']['hits']:
                 self.es.delete(index=self.index_name, id=hit['_id'])
             
