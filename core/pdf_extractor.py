@@ -1,14 +1,12 @@
+from elasticsearch import Elasticsearch
+from config.settings import settings
 import os
 import pytesseract
 from PyPDF2 import PdfReader
 from PIL import Image
 import io
-from elasticsearch import Elasticsearch
 import re
-from dotenv import load_dotenv
 from datetime import datetime
-
-load_dotenv()
 
 class PDFTextExtractor:
     def __init__(self):
@@ -82,7 +80,7 @@ class PDFTextExtractor:
                     if page_text.strip():
                         text += f"\nPage {page_num}:\n{page_text}\n"
                     else:
-                        images = self._convert_pdf_page_to_image(page)
+                        images = self._convert_pdf_page_to_bccl_image(page)
                         for img in images:
                             page_text = pytesseract.image_to_string(img, lang='tha+eng')
                             text += f"\nPage {page_num} (OCR):\n{page_text}\n"
@@ -129,10 +127,17 @@ class PDFTextExtractor:
         if title is None:
             title = os.path.basename(file_path)
         try:
-            search_query = {"query": {"term": {"file_path": file_path}}}
-            res = self.es.search(index=self.index_name, body=search_query, size=1000)
-            for hit in res['hits']['hits']:
-                self.es.delete(index=self.index_name, id=hit['_id'])
+            # ลบเอกสารที่มี file_path เดียวกันก่อน
+            self.es.delete_by_query(
+                index=self.index_name,
+                body={
+                    "query": {
+                        "term": {
+                            "file_path": file_path
+                        }
+                    }
+                }
+            )
             
             full_text = self.extract_text_from_pdf(file_path)
             pages = re.split(r'Page \d+:', full_text)
@@ -162,7 +167,7 @@ class PDFTextExtractor:
         except Exception as e:
             print(f"เกิดข้อผิดพลาดในการบันทึกข้อมูล: {e}")
 
-    def search_documents(self, query, min_score=0.5):
+    def search_documents(self, query, min_score=0.1):
         try:
             search_query = {
                 "query": {
@@ -204,12 +209,12 @@ class PDFTextExtractor:
             }
             res = self.es.search(index=self.index_name, body=search_query)
             results = []
-            seen_ids = set()
+            seen_titles = set()
             for hit in res['hits']['hits']:
-                doc_id = hit["_id"]
-                if doc_id in seen_ids:
+                doc_title = hit["_source"]["title"]
+                if doc_title in seen_titles:
                     continue
-                seen_ids.add(doc_id)
+                seen_titles.add(doc_title)
                 matched_terms = set()
                 if 'highlight' in hit:
                     for field, highlights in hit['highlight'].items():
@@ -217,7 +222,7 @@ class PDFTextExtractor:
                             terms = re.findall(r'<em>(.*?)</em>', hl)
                             matched_terms.update(terms)
                 results.append({
-                    "id": doc_id,
+                    "id": hit["_id"],
                     "title": hit["_source"]["title"],
                     "score": hit["_score"],
                     "matched_terms": list(matched_terms),
@@ -245,22 +250,3 @@ class PDFTextExtractor:
 
     def close(self):
         self.es.close()
-
-if __name__ == "__main__":
-    extractor = None
-    try:
-        extractor = PDFTextExtractor()
-        pdf_path = "test.pdf" 
-        if not os.path.exists(pdf_path):
-            print(f"File {pdf_path} not found")
-            exit(1)
-        extractor.save_to_database(pdf_path)
-        
-        search_query = "Mining"
-        print(f"\nทดสอบค้นหาด้วยคีย์เวิร์ด: {search_query}")
-        results = extractor.search_documents(search_query)
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        if extractor is not None:
-            extractor.close()
