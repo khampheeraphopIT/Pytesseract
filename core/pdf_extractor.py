@@ -7,17 +7,17 @@ from PIL import Image
 import io
 import re
 from datetime import datetime
+from utils.helpers import preprocess_text, extract_keywords
 
 class PDFTextExtractor:
     def __init__(self):
         self.es = Elasticsearch(
-            os.getenv('ELASTICSEARCH_HOSTS', 'http://localhost:9200'),
-            basic_auth=(
-                os.getenv('ELASTICSEARCH_USERNAME', 'elastic'), 
-                os.getenv('ELASTICSEARCH_PASSWORD', '')
-            )
+            "http://localhost:9200",
+            basic_auth=(settings.ELASTICSEARCH_USERNAME, settings.ELASTICSEARCH_PASSWORD)
         )
-        self.index_name = os.getenv('ELASTICSEARCH_INDEX', 'documents')
+        if not self.es.ping():
+            raise ConnectionError("Cannot connect to Elasticsearch")
+        self.index_name = settings.ELASTICSEARCH_INDEX
         self.create_index()
 
     def create_index(self):
@@ -80,7 +80,7 @@ class PDFTextExtractor:
                     if page_text.strip():
                         text += f"\nPage {page_num}:\n{page_text}\n"
                     else:
-                        images = self._convert_pdf_page_to_bccl_image(page)
+                        images = self._convert_pdf_page_to_image(page)
                         for img in images:
                             page_text = pytesseract.image_to_string(img, lang='tha+eng')
                             text += f"\nPage {page_num} (OCR):\n{page_text}\n"
@@ -92,7 +92,7 @@ class PDFTextExtractor:
         try:
             import pdf2image
             images = pdf2image.convert_from_bytes(
-                page._create_pdf_stream().getvalue(), 
+                page._create_pdf_stream().getvalue(),
                 dpi=dpi
             )
             return images
@@ -109,20 +109,6 @@ class PDFTextExtractor:
                 pass
             return []
 
-    def preprocess_text(self, text):
-        return text.strip()
-
-    def extract_keywords(self, text):
-        words = re.findall(r'[\u0E00-\u0E7F]+|[a-zA-Z][a-zA-Z0-9]*', text)
-        stopwords = ["และ", "กับ", "ใน", "ที่", "แห่ง", "เป็น", "ให้", "ได้", "ๆ", "and", "with", "in", "at"]
-        keywords = [
-            word.lower() for word in words 
-            if word.lower() not in stopwords and 
-               len(word) > 1 and 
-               not re.match(r'^\d+$', word)
-        ]
-        return list(set(keywords))
-
     def save_to_database(self, file_path, title=None):
         if title is None:
             title = os.path.basename(file_path)
@@ -138,15 +124,15 @@ class PDFTextExtractor:
                     }
                 }
             )
-            
+
             full_text = self.extract_text_from_pdf(file_path)
             pages = re.split(r'Page \d+:', full_text)
             pages_content = []
             all_keywords = set()
-            
+
             for page_num, page_text in enumerate(pages[1:], start=1):
-                normalized_text = self.preprocess_text(page_text)
-                keywords = self.extract_keywords(normalized_text)
+                normalized_text = preprocess_text(page_text)
+                keywords = extract_keywords(normalized_text)
                 all_keywords.update(keywords)
                 pages_content.append({
                     "page_number": page_num,
@@ -154,7 +140,7 @@ class PDFTextExtractor:
                     "normalized_text": normalized_text,
                     "keywords": keywords
                 })
-            
+
             document = {
                 "title": title,
                 "file_path": file_path,
@@ -169,32 +155,44 @@ class PDFTextExtractor:
 
     def search_documents(self, query, min_score=0.1):
         try:
+            # แยกคำค้นจาก query (เช่น "เทคนิค การใช้งาน การทำงาน" -> ["เทคนิค", "การใช้งาน", "การทำงาน"])
+            query_terms = [term.strip() for term in query.split() if term.strip()]
+            if not query_terms:
+                print("ไม่มีคำค้นที่ถูกต้อง")
+                return []
+
+            # สร้าง query สำหรับแต่ละคำค้น
+            should_clauses = []
+            for term in query_terms:
+                should_clauses.append({
+                    "multi_match": {
+                        "query": term,
+                        "fields": [
+                            "title^2",
+                            "title.english^2",
+                            "pages.normalized_text",
+                            "pages.normalized_text.english",
+                            "all_keywords^1.5",
+                            "pages.keywords"
+                        ],
+                        "type": "best_fields",
+                        "tie_breaker": 0.3
+                    }
+                })
+                should_clauses.append({
+                    "prefix": {
+                        "all_keywords": {
+                            "value": term.lower()
+                        }
+                    }
+                })
+
+            # สร้าง search query
             search_query = {
                 "query": {
                     "bool": {
-                        "should": [
-                            {
-                                "multi_match": {
-                                    "query": query,
-                                    "fields": [
-                                        "title^2",
-                                        "title.english^2",
-                                        "pages.normalized_text",
-                                        "pages.normalized_text.english",
-                                        "all_keywords^1.5",
-                                        "pages.keywords"
-                                    ]
-                                }
-                            },
-                            {
-                                "prefix": {
-                                    "all_keywords": {
-                                        "value": query.lower()
-                                    }
-                                }
-                            }
-                        ],
-                        "minimum_should_match": 1
+                        "should": should_clauses,
+                        "minimum_should_match": 1  # ต้องเจออย่างน้อย 1 คำ
                     }
                 },
                 "highlight": {

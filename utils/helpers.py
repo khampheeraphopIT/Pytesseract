@@ -1,15 +1,30 @@
 import re
+from pythainlp.tokenize import word_tokenize
+from pythainlp.corpus import thai_stopwords
 
 def preprocess_text(text: str) -> str:
-    return text.strip()
+    # ลบเครื่องหมายวรรคตอนและช่องว่างซ้ำ
+    text = re.sub(r'[^\w\s]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip().lower()
 
 def extract_keywords(text: str) -> list:
-    words = re.findall(r'[\u0E00-\u0E7F]+|[a-zA-Z][a-zA-Z0-9]*', text)
-    stopwords = ["และ", "กับ", "ใน", "ที่", "แห่ง", "เป็น", "ให้", "ได้", "ๆ", "and", "with", "in", "at"]
+    # ตัดคำภาษาไทยด้วย pythainlp
+    thai_words = word_tokenize(text, engine="newmm")
+    # ตัดคำภาษาอังกฤษ
+    english_words = re.findall(r'[a-zA-Z][a-zA-Z0-9]*', text)
+    words = thai_words + english_words
+    
+    # ใช้ stopwords จาก pythainlp และเพิ่มคำภาษาอังกฤษ
+    stopwords = set(thai_stopwords()).union({"and", "with", "in", "at"})
+    
+    # กรองคำ
     keywords = [
-        word.lower() for word in words 
-        if word.lower() not in stopwords and 
-        len(word) > 1 and 
+        word.lower() for word in words
+        if word.lower() not in stopwords and
+        len(word) > 1 and
         not re.match(r'^\d+$', word)
     ]
+    
+    # ลบคำซ้ำ
     return list(set(keywords))

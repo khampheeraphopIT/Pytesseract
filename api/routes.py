@@ -1,7 +1,7 @@
 import tempfile
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from core.pdf_extractor import PDFTextExtractor
-from api.schemas import UploadResponse, SearchResponse, SearchRequest
+from api.schemas import UploadResponse, SearchForm, SearchRequest
 from typing import List
 import os
 
@@ -35,13 +35,13 @@ async def upload_file(file: UploadFile = File(...)):
         print(f"Error processing file: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
-@router.post("/search", response_model=List[SearchResponse])
+@router.post("/search", response_model=List[SearchForm])
 async def search_documents(request: SearchRequest):
     print(f"Searching with query: {request.query}")
     try:
         results = extractor.search_documents(request.query, request.min_score)
         print(f"Found {len(results)} results")
-        return [SearchResponse(**result) for result in results]
+        return [SearchForm(**result) for result in results]
     except Exception as e:
         print(f"Error searching documents: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error searching documents: {str(e)}")

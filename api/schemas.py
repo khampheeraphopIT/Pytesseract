@@ -7,7 +7,7 @@ class UploadResponse(BaseModel):
     message: str
     extracted_text: Optional[str] = None
 
-class SearchResponse(BaseModel):
+class SearchForm(BaseModel):
     id: str
     title: str
     score: float
