@@ -55,11 +55,23 @@ class PDFTextExtractor:
                 },
                 "settings": {
                     "analysis": {
+                        "filter": {
+                            "thai_stop": {
+                                "type": "stop",
+                                "stopwords": "_thai_"
+                            },
+                            "thai_folding": {
+                                "type": "icu_folding",
+                            }
+                        },
                         "analyzer": {
                             "thai": {
-                                "type": "custom",
-                                "tokenizer": "thai",
-                                "filter": ["lowercase"]
+                                "tokenizer": "icu_tokenizer",
+                                "filter": [
+                                    "thai_stop",
+                                    "icu_folding",
+                                    "lowercase"
+                                ]
                             },
                             "english": {
                                 "type": "standard",
@@ -161,13 +173,12 @@ class PDFTextExtractor:
                 print("ไม่มีคำค้นที่ถูกต้อง")
                 return []
 
-            # สร้าง query สำหรับแต่ละคำค้น
             should_clauses = []
             for term in query_terms:
                 should_clauses.append({
                     "multi_match": {
                         "query": term,
-                        "fields": [ # ฟิลด์ที่ต้องการค้นหา
+                        "fields": [
                             "title^2",
                             "title.english^2",
                             "pages.normalized_text",
@@ -175,18 +186,18 @@ class PDFTextExtractor:
                             "all_keywords^1.5",
                             "pages.keywords"
                         ],
-                        "type": "best_fields", # เลือกฟิลด์ที่ตรงมากที่สุด
-                        "tie_breaker": 0.3
+                        "type": "best_fields",
+                        "tie_breaker": 0.3,
+                        "fuzziness": "AUTO",
+                        "prefix_length": 1
                     }
                 })
-                
 
-            # สร้าง search query
             search_query = {
                 "query": { # query.bool.should รวมเงื่อนไขทั้งหมด
                     "bool": {
                         "should": should_clauses,
-                        "minimum_should_match": 1  # ต้องเจออย่างน้อย 1 คำ
+                        "minimum_should_match": 1
                     }
                 },
                 "highlight": {
@@ -196,7 +207,8 @@ class PDFTextExtractor:
                         "pages.normalized_text": {},
                         "pages.normalized_text.english": {},
                         "all_keywords": {}
-                    }
+                    },
+                    "encoder": "html"  # รักษาวรรณยุกต์
                 }
             }
             res = self.es.search(index=self.index_name, body=search_query)
@@ -222,19 +234,13 @@ class PDFTextExtractor:
                 })
             filtered_results = [r for r in results if r['score'] >= min_score]
             if not filtered_results:
-                print("ไม่พบผลลัพธ์ที่ตรงกับคำค้นหา")
-            else:
-                print("\nผลการค้นหา:")
-                for result in filtered_results:
-                    print(f"เอกสาร: {result['title']} (ID: {result['id']})")
-                    print(f"คะแนน: {result['score']:.4f}")
-                    print(f"คำที่ตรงกัน: {', '.join(result['matched_terms']) or 'ไม่มีคำที่ไฮไลต์'}")
-                    if result['highlight']:
-                        print("ตัวอย่างข้อความที่พบ:")
-                        for highlights in result['highlight'].values():
-                            for hl in highlights:
-                                print(f" - {hl}")
-                    print("-" * 50)
+                print(f"ไม่พบผลลัพธ์สำหรับ query: {query}")
+                # Debug: ดูเอกสารใน index
+                all_docs = self.es.search(index=self.index_name, body={"query": {"match_all": {}}})
+                print("เอกสารใน index:")
+                for doc in all_docs['hits']['hits']:
+                    print(f"- Title: {doc['_source']['title']}")
+                    print(f"  Keywords (ตัวอย่าง): {doc['_source']['all_keywords'][:5]}")
             return filtered_results
         except Exception as e:
             print(f"เกิดข้อผิดพลาดในการค้นหา: {e}")

@@ -1,21 +1,23 @@
 import re
 from pythainlp.tokenize import word_tokenize
 from pythainlp.corpus import thai_stopwords
+import unicodedata
 
 def preprocess_text(text: str) -> str:
-    # ลบเครื่องหมายวรรคตอนและช่องว่างซ้ำ
-    text = re.sub(r'[^\w\s]', '', text)
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip().lower()
+    text = unicodedata.normalize('NFC', text)
+    # ลบตัวอักษรพิเศษ ยกเว้นไทย อังกฤษ ตัวเลข ช่องว่าง
+    text = re.sub(r'[^\u0E00-\u0E7Fa-zA-Z0-9\s]', ' ', text)
+    return text.strip().lower() 
 
 def extract_keywords(text: str) -> list:
-    # ตัดคำภาษาไทยด้วย pythainlp
+    text = unicodedata.normalize('NFC', text)
+    # ตัดคำภาษาไทย
     thai_words = word_tokenize(text, engine="newmm")
     # ตัดคำภาษาอังกฤษ
-    english_words = re.findall(r'[a-zA-Z][a-zA-Z0-9]*', text)
-    words = thai_words + english_words
+    english_words = re.findall(r'[a-zA-Z]+', text)
+    words = [word for word in thai_words + english_words if word]  # ลบคำว่าง
     
-    # ใช้ stopwords จาก pythainlp และเพิ่มคำภาษาอังกฤษ
+    # Stopwords
     stopwords = set(thai_stopwords()).union({"and", "with", "in", "at"})
     
     # กรองคำ
@@ -26,5 +28,4 @@ def extract_keywords(text: str) -> list:
         not re.match(r'^\d+$', word)
     ]
     
-    # ลบคำซ้ำ
     return list(set(keywords))
