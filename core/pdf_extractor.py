@@ -7,6 +7,7 @@ from PIL import Image
 import io
 import re
 from datetime import datetime
+import pdf2image
 from utils.helpers import preprocess_text, extract_keywords
 
 class PDFTextExtractor:
@@ -90,23 +91,22 @@ class PDFTextExtractor:
 
     def _convert_pdf_page_to_image(self, page, dpi=300):
         try:
-            import pdf2image
             images = pdf2image.convert_from_bytes(
                 page._create_pdf_stream().getvalue(),
                 dpi=dpi
             )
             return images
         except:
-            try:
-                if '/XObject' in page['/Resources']:
-                    x_object = page['/Resources']['/XObject'].get_object()
-                    for obj in x_object:
-                        if x_object[obj]['/Subtype'] == '/Image':
-                            img_data = x_object[obj].get_data()
-                            img = Image.open(io.BytesIO(img_data))
-                            return [img]
-            except:
-                pass
+            # try:
+            #     if '/XObject' in page['/Resources']:
+            #         x_object = page['/Resources']['/XObject'].get_object()
+            #         for obj in x_object:
+            #             if x_object[obj]['/Subtype'] == '/Image':
+            #                 img_data = x_object[obj].get_data()
+            #                 img = Image.open(io.BytesIO(img_data))
+            #                 return [img]
+            # except:
+            #     pass
             return []
 
     def save_to_database(self, file_path, title=None):
@@ -167,7 +167,7 @@ class PDFTextExtractor:
                 should_clauses.append({
                     "multi_match": {
                         "query": term,
-                        "fields": [
+                        "fields": [ # ฟิลด์ที่ต้องการค้นหา
                             "title^2",
                             "title.english^2",
                             "pages.normalized_text",
@@ -175,28 +175,22 @@ class PDFTextExtractor:
                             "all_keywords^1.5",
                             "pages.keywords"
                         ],
-                        "type": "best_fields",
+                        "type": "best_fields", # เลือกฟิลด์ที่ตรงมากที่สุด
                         "tie_breaker": 0.3
                     }
                 })
-                should_clauses.append({
-                    "prefix": {
-                        "all_keywords": {
-                            "value": term.lower()
-                        }
-                    }
-                })
+                
 
             # สร้าง search query
             search_query = {
-                "query": {
+                "query": { # query.bool.should รวมเงื่อนไขทั้งหมด
                     "bool": {
                         "should": should_clauses,
                         "minimum_should_match": 1  # ต้องเจออย่างน้อย 1 คำ
                     }
                 },
                 "highlight": {
-                    "fields": {
+                    "fields": { # ฟิลด์ที่ต้องการ Highlights
                         "title": {},
                         "title.english": {},
                         "pages.normalized_text": {},
@@ -208,14 +202,14 @@ class PDFTextExtractor:
             res = self.es.search(index=self.index_name, body=search_query)
             results = []
             seen_titles = set()
-            for hit in res['hits']['hits']:
+            for hit in res['hits']['hits']: # hit คือเอกสารที่เจอ
                 doc_title = hit["_source"]["title"]
                 if doc_title in seen_titles:
                     continue
                 seen_titles.add(doc_title)
                 matched_terms = set()
                 if 'highlight' in hit:
-                    for field, highlights in hit['highlight'].items():
+                    for highlights in hit['highlight'].values():
                         for hl in highlights:
                             terms = re.findall(r'<em>(.*?)</em>', hl)
                             matched_terms.update(terms)
@@ -237,7 +231,7 @@ class PDFTextExtractor:
                     print(f"คำที่ตรงกัน: {', '.join(result['matched_terms']) or 'ไม่มีคำที่ไฮไลต์'}")
                     if result['highlight']:
                         print("ตัวอย่างข้อความที่พบ:")
-                        for field, highlights in result['highlight'].items():
+                        for highlights in result['highlight'].values():
                             for hl in highlights:
                                 print(f" - {hl}")
                     print("-" * 50)
