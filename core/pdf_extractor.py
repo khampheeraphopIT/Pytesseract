@@ -1,13 +1,17 @@
-from elasticsearch import Elasticsearch
-from config.settings import settings
 import os
-import pytesseract
-from PyPDF2 import PdfReader
-from PIL import Image
 import io
 import re
 from datetime import datetime
+
+# Third-party
+from elasticsearch import Elasticsearch
+import pytesseract
+from PyPDF2 import PdfReader
+from PIL import Image
 import pdf2image
+
+# Local
+from config.settings import settings
 from utils.helpers import preprocess_text, extract_keywords
 
 class PDFTextExtractor:
@@ -61,16 +65,22 @@ class PDFTextExtractor:
                                 "stopwords": "_thai_"
                             },
                             "thai_folding": {
-                                "type": "icu_folding",
-                            }
+                                "type": "icu_folding"
+                            },
+                            "edge_ngram_filter": {  # เพิ่ม edge_ngram
+                                "type": "edge_ngram",
+                                "min_gram": 2,
+                                "max_gram": 10
+                            },
                         },
                         "analyzer": {
                             "thai": {
                                 "tokenizer": "icu_tokenizer",
                                 "filter": [
                                     "thai_stop",
-                                    "icu_folding",
-                                    "lowercase"
+                                    "thai_folding",
+                                    "lowercase",
+                                    "edge_ngram_filter"
                                 ]
                             },
                             "english": {
@@ -93,7 +103,7 @@ class PDFTextExtractor:
                     if page_text.strip():
                         text += f"\nPage {page_num}:\n{page_text}\n"
                     else:
-                        images = self._convert_pdf_page_to_image(page)
+                        images = self._convert_pdf_page_to_image(file_path, page_num)
                         for img in images:
                             page_text = pytesseract.image_to_string(img, lang='tha+eng')
                             text += f"\nPage {page_num} (OCR):\n{page_text}\n"
@@ -101,11 +111,14 @@ class PDFTextExtractor:
             print(f"Error processing PDF: {e}")
         return text
 
-    def _convert_pdf_page_to_image(self, page, dpi=300):
+    def _convert_pdf_page_to_image(self, file_path, page_num, dpi=300):
         try:
-            images = pdf2image.convert_from_bytes(
-                page._create_pdf_stream().getvalue(),
-                dpi=dpi
+            # แปลงหน้า PDF เฉพาะหน้าที่ต้องการเป็นภาพ
+            images = pdf2image.convert_from_path(
+                file_path,
+                dpi=dpi,
+                first_page=page_num,
+                last_page=page_num
             )
             return images
         except:
@@ -121,7 +134,12 @@ class PDFTextExtractor:
             #     pass
             return []
 
+
     def save_to_database(self, file_path, title=None):
+        if not self.es.indices.exists(index=self.index_name):
+            print(f"Index '{self.index_name}' ไม่มีอยู่ กำลังสร้างใหม่...")
+            self.create_index()
+        
         if title is None:
             title = os.path.basename(file_path)
         try:
@@ -170,7 +188,7 @@ class PDFTextExtractor:
             # แยกคำค้นจาก query (เช่น "เทคนิค การใช้งาน การทำงาน" -> ["เทคนิค", "การใช้งาน", "การทำงาน"])
             query_terms = [term.strip() for term in query.split() if term.strip()]
             if not query_terms:
-                print("ไม่มีคำค้นที่ถูกต้อง")
+                print("Query not found")
                 return []
 
             should_clauses = []
@@ -201,21 +219,24 @@ class PDFTextExtractor:
                     }
                 },
                 "highlight": {
-                    "fields": { # ฟิลด์ที่ต้องการ Highlights
+                    "fields": {
                         "title": {},
                         "title.english": {},
                         "pages.normalized_text": {},
                         "pages.normalized_text.english": {},
-                        "all_keywords": {}
+                        "all_keywords": {},
                     },
-                    "encoder": "html"  # รักษาวรรณยุกต์
+                    "encoder": "html"
                 }
             }
             res = self.es.search(index=self.index_name, body=search_query)
+
             results = []
             seen_titles = set()
-            for hit in res['hits']['hits']: # hit คือเอกสารที่เจอ
+            for hit in res['hits']['hits']:
                 doc_title = hit["_source"]["title"]
+                doc_id = hit["_id"]
+                print(f"Debug: Hit ID: {doc_id}, Title: {doc_title}")
                 if doc_title in seen_titles:
                     continue
                 seen_titles.add(doc_title)
@@ -225,6 +246,7 @@ class PDFTextExtractor:
                         for hl in highlights:
                             terms = re.findall(r'<em>(.*?)</em>', hl)
                             matched_terms.update(terms)
+                
                 results.append({
                     "id": hit["_id"],
                     "title": hit["_source"]["title"],
@@ -232,16 +254,25 @@ class PDFTextExtractor:
                     "matched_terms": list(matched_terms),
                     "highlight": hit.get('highlight', {})
                 })
-            filtered_results = [r for r in results if r['score'] >= min_score]
-            if not filtered_results:
-                print(f"ไม่พบผลลัพธ์สำหรับ query: {query}")
-                # Debug: ดูเอกสารใน index
-                all_docs = self.es.search(index=self.index_name, body={"query": {"match_all": {}}})
+                
+            print(f"กำลังค้นหาคำว่า: {query}")
+            
+            if results:
+                print(f"พบเอกสาร: {len(results)} ")
+                for r in results:
+                    print(f"Title: {r['title']}")
+                    highlight = r.get('highlight', {})
+                    for field, hls in highlight.items():
+                        for hl in hls:
+                            clean_hl = re.sub(r'</?em>', '', hl)
+                            print(f"- {field}: {clean_hl}")
+            else:
+                print(f"ไม่พบผล: {query}")
+                docs = self.es.search(index=self.index_name, body={"query": {"match_all": {}}})
                 print("เอกสารใน index:")
-                for doc in all_docs['hits']['hits']:
-                    print(f"- Title: {doc['_source']['title']}")
-                    print(f"  Keywords (ตัวอย่าง): {doc['_source']['all_keywords'][:5]}")
-            return filtered_results
+                for doc in docs['hits']['hits']:
+                    print(f"- {doc['_source']['title']}")
+            return results
         except Exception as e:
             print(f"เกิดข้อผิดพลาดในการค้นหา: {e}")
             return []
