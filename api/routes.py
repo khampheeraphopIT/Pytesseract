@@ -8,7 +8,7 @@ import os
 router = APIRouter()
 extractor = PDFTextExtractor()
 
-@router.post("/upload")
+@router.post("/upload", response_model=UploadResponse)
 async def upload_file(file: UploadFile = File(...)):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
@@ -17,10 +17,17 @@ async def upload_file(file: UploadFile = File(...)):
             tmp.write(await file.read())
             tmp_path = tmp.name
         extracted_text = extractor.extract_text_from_pdf(tmp_path)
-        extractor.save_to_database(tmp_path, file.filename)
+        
+        document = extractor.save_to_database(tmp_path, file.filename)
+        
+        # เก็บผลลัพธ์จาก save_to_database เพื่อดึง _id
+        res = extractor.es.index(
+            index = extractor.index_name,
+            body = document or {}
+        )
         os.remove(tmp_path)
         return UploadResponse(
-            id="TBD",
+            id=res['_id'],
             title=file.filename,
             message="File uploaded successfully",
             extracted_text=extracted_text
@@ -28,7 +35,7 @@ async def upload_file(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
-@router.post("/search")
+@router.post("/search", response_model=List[SearchForm])
 async def search_documents(request: SearchRequest):
     try:
         results = extractor.search_documents(request.query, request.min_score)

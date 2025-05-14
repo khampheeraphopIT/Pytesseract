@@ -90,8 +90,8 @@ class PDFTextExtractor:
                                 ]
                             },
                             "english": {
-                                "type": "standard",
-                                "filter": ["lowercase"]
+                                "type": "english",
+                                "filter": ["lowercase", "edge_ngram_filter"]
                             }
                         }
                     }
@@ -184,8 +184,8 @@ class PDFTextExtractor:
                 "pages": pages_content,
                 "all_keywords": list(all_keywords)
             }
-            res = self.es.index(index=self.index_name, body=document)
-            print(f"Document saved to Elasticsearch with ID: {res['_id']}")
+            return document
+        
         except Exception as e:
             print(f"เกิดข้อผิดพลาดในการบันทึกข้อมูล: {e}")
 
@@ -199,14 +199,15 @@ class PDFTextExtractor:
 
             should_clauses = []
             for term in query_terms:
+                # เดิม: Multi-match query
                 should_clauses.append({
                     "multi_match": {
                         "query": term,
                         "fields": [
                             "title^2",
                             "title.english^2",
-                            "pages.normalized_text",
-                            "pages.normalized_text.english",
+                            "pages.normalized_text^1.2",
+                            "pages.normalized_text.english^1.5",
                             "all_keywords^1.5",
                             "pages.keywords"
                         ],
@@ -218,7 +219,7 @@ class PDFTextExtractor:
                 })
 
             search_query = {
-                "query": { # query.bool.should รวมเงื่อนไขทั้งหมด
+                "query": {
                     "bool": {
                         "should": should_clauses,
                         "minimum_should_match": 1

@@ -12,7 +12,7 @@ class SearchForm(BaseModel):
     title: str
     score: float
     matched_terms: List[str]
-    highlight: Dict
+    highlight: Dict[str, List[str]]
 
 class SearchRequest(BaseModel):
     query: str
