@@ -33,7 +33,9 @@ class PDFTextExtractor:
                         "title": {
                             "type": "text",
                             "analyzer": "thai",
-                            "fields": {"english": {"type": "text", "analyzer": "english"}}
+                            "fields": {
+                                "english": {"type": "text", "analyzer": "english"}
+                            }
                         },
                         "file_path": {"type": "keyword"},
                         "upload_date": {"type": "date"},
@@ -44,12 +46,16 @@ class PDFTextExtractor:
                                 "original_text": {
                                     "type": "text",
                                     "analyzer": "thai",
-                                    "fields": {"english": {"type": "text", "analyzer": "english"}}
+                                    "fields": {
+                                        "english": {"type": "text", "analyzer": "english"}
+                                    }
                                 },
                                 "normalized_text": {
                                     "type": "text",
                                     "analyzer": "thai",
-                                    "fields": {"english": {"type": "text", "analyzer": "english"}}
+                                    "fields": {
+                                        "english": {"type": "text", "analyzer": "english"}
+                                    }
                                 },
                                 "keywords": {"type": "keyword"}
                             }
@@ -67,11 +73,11 @@ class PDFTextExtractor:
                             "thai_folding": {
                                 "type": "icu_folding"
                             },
-                            "edge_ngram_filter": {  # เพิ่ม edge_ngram
+                            "edge_ngram_filter": {
                                 "type": "edge_ngram",
                                 "min_gram": 2,
                                 "max_gram": 10
-                            },
+                            }
                         },
                         "analyzer": {
                             "thai": {
@@ -235,8 +241,7 @@ class PDFTextExtractor:
             seen_titles = set()
             for hit in res['hits']['hits']:
                 doc_title = hit["_source"]["title"]
-                doc_id = hit["_id"]
-                print(f"Debug: Hit ID: {doc_id}, Title: {doc_title}")
+                
                 if doc_title in seen_titles:
                     continue
                 seen_titles.add(doc_title)

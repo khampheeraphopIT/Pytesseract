@@ -5,8 +5,8 @@ import unicodedata
 
 def preprocess_text(text: str) -> str:
     text = unicodedata.normalize('NFC', text)
-    # ลบตัวอักษรพิเศษ ยกเว้นไทย อังกฤษ ตัวเลข ช่องว่าง
-    text = re.sub(r'[^\u0E00-\u0E7Fa-zA-Z0-9\s]', ' ', text)
+    # เก็บตัวอักษรไทย, อังกฤษ, ตัวเลข, ช่องว่าง, และ @ . - / &
+    text = re.sub(r'[^\u0E00-\u0E7Fa-zA-Z0-9\s@.-/&]', ' ', text)
     return text.strip().lower() 
 
 def extract_keywords(text: str) -> list:
