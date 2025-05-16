@@ -174,7 +174,7 @@ class PDFTextExtractor:
                     "page_number": page_num,
                     "original_text": page_text,
                     "normalized_text": normalized_text,
-                    "keywords": keywords
+                    "keywords": list(set(keywords))
                 })
 
             document = {
@@ -191,23 +191,37 @@ class PDFTextExtractor:
 
     def search_documents(self, query, min_score=0.1):
         try:
-            # แยกคำค้นจาก query (เช่น "เทคนิค การใช้งาน การทำงาน" -> ["เทคนิค", "การใช้งาน", "การทำงาน"])
             query_terms = [term.strip() for term in query.split() if term.strip()]
             if not query_terms:
                 print("Query not found")
                 return []
 
-            should_clauses = []
+            exact_clauses = []
+            fuzzy_clauses = []
             for term in query_terms:
-                # เดิม: Multi-match query
-                should_clauses.append({
+                exact_clauses.append({
                     "multi_match": {
                         "query": term,
                         "fields": [
                             "title^2",
                             "title.english^2",
-                            "pages.normalized_text^1.2",
-                            "pages.normalized_text.english^1.5",
+                            "pages.normalized_text",
+                            "pages.normalized_text.english",
+                            "all_keywords^1.5",
+                            "pages.keywords"
+                        ],
+                        "type": "best_fields",
+                        "tie_breaker": 0.3
+                    }
+                })
+                fuzzy_clauses.append({
+                    "multi_match": {
+                        "query": term,
+                        "fields": [
+                            "title^2",
+                            "title.english^2",
+                            "pages.normalized_text",
+                            "pages.normalized_text.english",
                             "all_keywords^1.5",
                             "pages.keywords"
                         ],
@@ -221,7 +235,35 @@ class PDFTextExtractor:
             search_query = {
                 "query": {
                     "bool": {
-                        "should": should_clauses,
+                        "should": [
+                            {"bool": {"should": exact_clauses, "minimum_should_match": 1}},
+                            {"bool": {"should": fuzzy_clauses, "minimum_should_match": 1}},
+                            {
+                                "nested": {
+                                    "path": "pages",
+                                    "query": {
+                                        "bool": {
+                                            "should": [
+                                                {"bool": {"should": exact_clauses, "minimum_should_match": 1}},
+                                                {"bool": {"should": fuzzy_clauses, "minimum_should_match": 1}}
+                                            ],
+                                            "minimum_should_match": 1
+                                        }
+                                    },
+                                    "inner_hits": {
+                                        "name": "pages",
+                                        "highlight": {
+                                            "fields": {
+                                                "pages.normalized_text": {},
+                                                "pages.normalized_text.english": {},
+                                                "pages.keywords": {}
+                                            },
+                                            "encoder": "html"
+                                        }
+                                    }
+                                }
+                            }
+                        ],
                         "minimum_should_match": 1
                     }
                 },
@@ -232,52 +274,75 @@ class PDFTextExtractor:
                         "pages.normalized_text": {},
                         "pages.normalized_text.english": {},
                         "all_keywords": {},
+                        "pages.keywords": {}
                     },
                     "encoder": "html"
-                }
+                },
+                "min_score": min_score
             }
+
             res = self.es.search(index=self.index_name, body=search_query)
 
             results = []
             seen_titles = set()
             for hit in res['hits']['hits']:
                 doc_title = hit["_source"]["title"]
-                
                 if doc_title in seen_titles:
                     continue
                 seen_titles.add(doc_title)
-                matched_terms = set()
+
+                matched_terms = {"exact": set(), "fuzzy": set()}
                 if 'highlight' in hit:
                     for highlights in hit['highlight'].values():
                         for hl in highlights:
                             terms = re.findall(r'<em>(.*?)</em>', hl)
-                            matched_terms.update(terms)
-                
+                            for term in terms:
+                                if any(t.lower() == term.lower() for t in query_terms):
+                                    matched_terms["exact"].add(term)
+                                else:
+                                    matched_terms["fuzzy"].add(term)
+
+                page_keywords = [
+                    {
+                        "page_number": int(page["page_number"]),
+                        "keywords": page.get("keywords", [])
+                    }
+                    for page in hit["_source"]["pages"]
+                ]
+
+                matched_pages = []
+                if 'inner_hits' in hit and 'pages' in hit['inner_hits']:
+                    for inner_hit in hit['inner_hits']['pages']['hits']['hits']:
+                        matched_pages.append({
+                            "page_number": int(inner_hit["_source"]["page_number"]),
+                            "highlight": {k: [str(v) for v in val] for k, val in inner_hit.get("highlight", {}).items()}
+                        })
+
                 results.append({
                     "id": hit["_id"],
                     "title": hit["_source"]["title"],
                     "score": hit["_score"],
-                    "matched_terms": list(matched_terms),
-                    "highlight": hit.get('highlight', {})
+                    "matched_terms": {
+                        "exact": list(matched_terms["exact"]),
+                        "fuzzy": list(matched_terms["fuzzy"])
+                    },
+                    "highlight": hit.get('highlight', {}),
+                    "page_keywords": page_keywords,
+                    "all_keywords": hit["_source"].get("all_keywords", []),
+                    "matched_pages": matched_pages
                 })
-                
+
             print(f"กำลังค้นหาคำว่า: {query}")
-            
             if results:
                 print(f"พบเอกสาร: {len(results)} ")
                 for r in results:
                     print(f"Title: {r['title']}")
-                    highlight = r.get('highlight', {})
-                    for field, hls in highlight.items():
-                        for hl in hls:
-                            clean_hl = re.sub(r'</?em>', '', hl)
-                            print(f"- {field}: {clean_hl}")
+                    print(f"Score: {r['score']}")
+                    print(f"Exact Matches: {r['matched_terms']['exact']}")
+                    print(f"Fuzzy Matches: {r['matched_terms']['fuzzy']}")
             else:
                 print(f"ไม่พบผล: {query}")
-                docs = self.es.search(index=self.index_name, body={"query": {"match_all": {}}})
-                print("เอกสารใน index:")
-                for doc in docs['hits']['hits']:
-                    print(f"- {doc['_source']['title']}")
+
             return results
         except Exception as e:
             print(f"เกิดข้อผิดพลาดในการค้นหา: {e}")
