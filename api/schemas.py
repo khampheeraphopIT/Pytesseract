@@ -1,10 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 
-class PageKeyword(BaseModel):
-    page_number: int
-    keywords: List[str]
-
 class MatchedPage(BaseModel):
     page_number: int
     highlight: Dict[str, List[str]]
@@ -19,9 +15,9 @@ class SearchForm(BaseModel):
     id: str
     title: str
     score: float
+    query: str
     matched_terms: Dict[str, List[str]]
     highlight: Dict[str, List[str]]
-    page_keywords: List[PageKeyword] = [] 
     all_keywords: List[str] = []
     matched_pages: List[MatchedPage] = []
 

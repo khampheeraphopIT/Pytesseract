@@ -140,16 +140,14 @@ class PDFTextExtractor:
             #     pass
             return []
 
-
     def save_to_database(self, file_path, title=None):
         if not self.es.indices.exists(index=self.index_name):
-            print(f"Index '{self.index_name}' ไม่มีอยู่ กำลังสร้างใหม่...")
+            print(f"Index '{self.index_name}' does not exist, creating new...")
             self.create_index()
         
         if title is None:
             title = os.path.basename(file_path)
         try:
-            # ลบเอกสารที่มี file_path เดียวกันก่อน
             self.es.delete_by_query(
                 index=self.index_name,
                 body={
@@ -182,12 +180,12 @@ class PDFTextExtractor:
                 "file_path": file_path,
                 "upload_date": datetime.now().isoformat(),
                 "pages": pages_content,
-                "all_keywords": list(all_keywords)
+                "all_keywords": list(all_keywords)[:20]
             }
             return document
-        
         except Exception as e:
-            print(f"เกิดข้อผิดพลาดในการบันทึกข้อมูล: {e}")
+            print(f"Error saving document: {e}")
+            return None
 
     def search_documents(self, query, min_score=0.1):
         try:
@@ -302,19 +300,12 @@ class PDFTextExtractor:
                                 else:
                                     matched_terms["fuzzy"].add(term)
 
-                page_keywords = [
-                    {
-                        "page_number": int(page["page_number"]),
-                        "keywords": page.get("keywords", [])
-                    }
-                    for page in hit["_source"]["pages"]
-                ]
-
                 matched_pages = []
                 if 'inner_hits' in hit and 'pages' in hit['inner_hits']:
                     for inner_hit in hit['inner_hits']['pages']['hits']['hits']:
                         matched_pages.append({
                             "page_number": int(inner_hit["_source"]["page_number"]),
+                            "original_text": inner_hit["_source"]["original_text"],  # เพิ่ม original_text
                             "highlight": {k: [str(v) for v in val] for k, val in inner_hit.get("highlight", {}).items()}
                         })
 
@@ -327,25 +318,24 @@ class PDFTextExtractor:
                         "fuzzy": list(matched_terms["fuzzy"])
                     },
                     "highlight": hit.get('highlight', {}),
-                    "page_keywords": page_keywords,
-                    "all_keywords": hit["_source"].get("all_keywords", []),
+                    "all_keywords": hit["_source"].get("all_keywords", [])[:20],
                     "matched_pages": matched_pages
                 })
 
-            print(f"กำลังค้นหาคำว่า: {query}")
+            print(f"Searching for: {query}")
             if results:
-                print(f"พบเอกสาร: {len(results)} ")
+                print(f"Found {len(results)} documents")
                 for r in results:
                     print(f"Title: {r['title']}")
                     print(f"Score: {r['score']}")
                     print(f"Exact Matches: {r['matched_terms']['exact']}")
                     print(f"Fuzzy Matches: {r['matched_terms']['fuzzy']}")
             else:
-                print(f"ไม่พบผล: {query}")
+                print(f"No results for: {query}")
 
             return results
         except Exception as e:
-            print(f"เกิดข้อผิดพลาดในการค้นหา: {e}")
+            print(f"Search error: {e}")
             return []
 
     def close(self):
