@@ -258,6 +258,7 @@ class PDFTextExtractor:
                                     },
                                     "inner_hits": {
                                         "name": "pages",
+                                        "size": 100,
                                         "highlight": {
                                             "fields": {
                                                 "pages.normalized_text": {},
