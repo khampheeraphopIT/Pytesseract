@@ -182,6 +182,14 @@ class PDFTextExtractor:
                 "pages": pages_content,
                 "all_keywords": list(all_keywords)[:20]
             }
+            # บันทึกเอกสารลง Elasticsearch โดยตรง
+            res = self.es.index(
+                index=self.index_name,
+                body=document
+            )
+
+            # คืนค่า document พร้อม _id จากการบันทึก
+            document["_id"] = res["_id"]
             return document
         except Exception as e:
             print(f"Error saving document: {e}")
@@ -313,6 +321,7 @@ class PDFTextExtractor:
                     "id": hit["_id"],
                     "title": hit["_source"]["title"],
                     "score": hit["_score"],
+                    "query": query,
                     "matched_terms": {
                         "exact": list(matched_terms["exact"]),
                         "fuzzy": list(matched_terms["fuzzy"])

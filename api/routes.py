@@ -16,18 +16,18 @@ async def upload_file(file: UploadFile = File(...)):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
+        
         extracted_text = extractor.extract_text_from_pdf(tmp_path)
         
         document = extractor.save_to_database(tmp_path, file.filename)
         
-        # เก็บผลลัพธ์จาก save_to_database เพื่อดึง _id
-        res = extractor.es.index(
-            index = extractor.index_name,
-            body = document or {}
-        )
+        # ตรวจสอบว่า document ไม่เป็น None
+        if document is None:
+            raise HTTPException(status_code=500, detail="Error saving document to database")
+        
         os.remove(tmp_path)
         return UploadResponse(
-            id=res['_id'],
+            id=document["_id"], 
             title=file.filename,
             message="File uploaded successfully",
             extracted_text=extracted_text
