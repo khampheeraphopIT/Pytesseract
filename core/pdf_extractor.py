@@ -178,7 +178,7 @@ class PDFTextExtractor:
             document = {
                 "title": title,
                 "file_path": file_path,
-                "upload_date": datetime.now().isoformat(),
+                "upload_date": datetime.now(),
                 "pages": pages_content,
                 "all_keywords": list(all_keywords)[:20]
             }
