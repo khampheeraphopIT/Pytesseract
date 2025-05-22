@@ -110,18 +110,13 @@ class PDFTextExtractor:
             )
             processed_images = []
             for img in images:
-                # แปลง PIL Image เป็น OpenCV
                 img_array = np.array(img)
                 img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-                # แปลงเป็น grayscale
                 gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
-                # ใช้ adaptive thresholding เพื่อเพิ่มความชัดเจน
                 thresh = cv2.adaptiveThreshold(
                     gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 3
                 )
-                # แปลงกลับเป็น PIL Image
                 img = Image.fromarray(thresh)
-                # เพิ่มคอนทราสต์และ sharpen
                 img = ImageEnhance.Contrast(img).enhance(2.0)
                 img = img.filter(ImageFilter.SHARPEN)
                 processed_images.append(img)
@@ -300,7 +295,8 @@ class PDFTextExtractor:
                         matched_pages.append({
                             "page_number": int(inner_hit["_source"]["page_number"]),
                             "highlight": {k: [str(v) for v in val] for k, val in page_highlights.items()},
-                            "exact_match_counts": exact_match_counts
+                            "exact_match_counts": exact_match_counts,
+                            "keywords": inner_hit["_source"].get("keywords", [])  # เพิ่ม keywords
                         })
 
                 results.append({
