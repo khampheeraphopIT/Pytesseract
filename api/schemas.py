@@ -4,6 +4,7 @@ from typing import List, Dict, Optional
 class MatchedPage(BaseModel):
     page_number: int
     highlight: Dict[str, List[str]]
+    exact_match_counts: Dict[str, int] = {}
 
 class UploadResponse(BaseModel):
     id: str

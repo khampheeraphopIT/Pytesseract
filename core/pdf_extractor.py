@@ -1,16 +1,14 @@
 import os
-import io
 import re
 from datetime import datetime
-
-# Third-party
 from elasticsearch import Elasticsearch
 import pytesseract
 from PyPDF2 import PdfReader
+from PIL import ImageEnhance, ImageFilter
 from PIL import Image
+import cv2
+import numpy as np
 import pdf2image
-
-# Local
 from config.settings import settings
 from utils.helpers import preprocess_text, extract_keywords
 
@@ -30,33 +28,15 @@ class PDFTextExtractor:
             mapping = {
                 "mappings": {
                     "properties": {
-                        "title": {
-                            "type": "text",
-                            "analyzer": "thai",
-                            "fields": {
-                                "english": {"type": "text", "analyzer": "english"}
-                            }
-                        },
+                        "title": {"type": "text", "analyzer": "standard"},
                         "file_path": {"type": "keyword"},
                         "upload_date": {"type": "date"},
                         "pages": {
                             "type": "nested",
                             "properties": {
                                 "page_number": {"type": "integer"},
-                                "original_text": {
-                                    "type": "text",
-                                    "analyzer": "thai",
-                                    "fields": {
-                                        "english": {"type": "text", "analyzer": "english"}
-                                    }
-                                },
-                                "normalized_text": {
-                                    "type": "text",
-                                    "analyzer": "thai",
-                                    "fields": {
-                                        "english": {"type": "text", "analyzer": "english"}
-                                    }
-                                },
+                                "original_text": {"type": "text", "analyzer": "standard"},
+                                "normalized_text": {"type": "text", "analyzer": "thai"},
                                 "keywords": {"type": "keyword"}
                             }
                         },
@@ -66,13 +46,9 @@ class PDFTextExtractor:
                 "settings": {
                     "analysis": {
                         "filter": {
-                            "thai_stop": {
-                                "type": "stop",
-                                "stopwords": "_thai_"
-                            },
-                            "thai_folding": {
-                                "type": "icu_folding"
-                            },
+                            "thai_stop": {"type": "stop", "stopwords": "_thai_"},
+                            "english_stop": {"type": "stop", "stopwords": "_english_"},
+                            "thai_folding": {"type": "icu_folding"},
                             "edge_ngram_filter": {
                                 "type": "edge_ngram",
                                 "min_gram": 2,
@@ -89,9 +65,13 @@ class PDFTextExtractor:
                                     "edge_ngram_filter"
                                 ]
                             },
-                            "english": {
-                                "type": "english",
-                                "filter": ["lowercase", "edge_ngram_filter"]
+                            "standard": {
+                                "tokenizer": "standard",
+                                "filter": [
+                                    "english_stop",
+                                    "lowercase",
+                                    "edge_ngram_filter"
+                                ]
                             }
                         }
                     }
@@ -109,35 +89,44 @@ class PDFTextExtractor:
                     if page_text.strip():
                         text += f"\nPage {page_num}:\n{page_text}\n"
                     else:
-                        images = self._convert_pdf_page_to_image(file_path, page_num)
+                        images = self._convert_pdf_page_to_image(file_path, page_num, dpi=400)
                         for img in images:
-                            page_text = pytesseract.image_to_string(img, lang='tha+eng')
+                            img = img.convert('L')
+                            img = ImageEnhance.Contrast(img).enhance(2.0)
+                            img = img.filter(ImageFilter.SHARPEN)
+                            page_text = pytesseract.image_to_string(img, lang='tha+eng', config='--psm 6')
                             text += f"\nPage {page_num} (OCR):\n{page_text}\n"
         except Exception as e:
             print(f"Error processing PDF: {e}")
         return text
 
-    def _convert_pdf_page_to_image(self, file_path, page_num, dpi=300):
+    def _convert_pdf_page_to_image(self, file_path, page_num, dpi=600):
         try:
-            # แปลงหน้า PDF เฉพาะหน้าที่ต้องการเป็นภาพ
             images = pdf2image.convert_from_path(
                 file_path,
                 dpi=dpi,
                 first_page=page_num,
                 last_page=page_num
             )
-            return images
+            processed_images = []
+            for img in images:
+                # แปลง PIL Image เป็น OpenCV
+                img_array = np.array(img)
+                img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                # แปลงเป็น grayscale
+                gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
+                # ใช้ adaptive thresholding เพื่อเพิ่มความชัดเจน
+                thresh = cv2.adaptiveThreshold(
+                    gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 3
+                )
+                # แปลงกลับเป็น PIL Image
+                img = Image.fromarray(thresh)
+                # เพิ่มคอนทราสต์และ sharpen
+                img = ImageEnhance.Contrast(img).enhance(2.0)
+                img = img.filter(ImageFilter.SHARPEN)
+                processed_images.append(img)
+            return processed_images
         except:
-            # try:
-            #     if '/XObject' in page['/Resources']:
-            #         x_object = page['/Resources']['/XObject'].get_object()
-            #         for obj in x_object:
-            #             if x_object[obj]['/Subtype'] == '/Image':
-            #                 img_data = x_object[obj].get_data()
-            #                 img = Image.open(io.BytesIO(img_data))
-            #                 return [img]
-            # except:
-            #     pass
             return []
 
     def save_to_database(self, file_path, title=None):
@@ -150,13 +139,7 @@ class PDFTextExtractor:
         try:
             self.es.delete_by_query(
                 index=self.index_name,
-                body={
-                    "query": {
-                        "term": {
-                            "file_path": file_path
-                        }
-                    }
-                }
+                body={"query": {"term": {"file_path": file_path}}}
             )
 
             full_text = self.extract_text_from_pdf(file_path)
@@ -180,22 +163,16 @@ class PDFTextExtractor:
                 "file_path": file_path,
                 "upload_date": datetime.now(),
                 "pages": pages_content,
-                "all_keywords": list(all_keywords)[:20]
+                "all_keywords": list(all_keywords)
             }
-            # บันทึกเอกสารลง Elasticsearch โดยตรง
-            res = self.es.index(
-                index=self.index_name,
-                body=document
-            )
-
-            # คืนค่า document พร้อม _id จากการบันทึก
+            res = self.es.index(index=self.index_name, body=document)
             document["_id"] = res["_id"]
             return document
         except Exception as e:
             print(f"Error saving document: {e}")
             return None
 
-    def search_documents(self, query, min_score=0.1):
+    def search_documents(self, query, min_score=0):
         try:
             query_terms = [term.strip() for term in query.split() if term.strip()]
             if not query_terms:
@@ -210,9 +187,7 @@ class PDFTextExtractor:
                         "query": term,
                         "fields": [
                             "title^2",
-                            "title.english^2",
                             "pages.normalized_text",
-                            "pages.normalized_text.english",
                             "all_keywords^1.5",
                             "pages.keywords"
                         ],
@@ -225,9 +200,7 @@ class PDFTextExtractor:
                         "query": term,
                         "fields": [
                             "title^2",
-                            "title.english^2",
                             "pages.normalized_text",
-                            "pages.normalized_text.english",
                             "all_keywords^1.5",
                             "pages.keywords"
                         ],
@@ -261,8 +234,10 @@ class PDFTextExtractor:
                                         "size": 100,
                                         "highlight": {
                                             "fields": {
-                                                "pages.normalized_text": {},
-                                                "pages.normalized_text.english": {},
+                                                "pages.normalized_text": {
+                                                    "fragment_size": 0,
+                                                    "number_of_fragments": 0
+                                                },
                                                 "pages.keywords": {}
                                             },
                                             "encoder": "html"
@@ -277,9 +252,10 @@ class PDFTextExtractor:
                 "highlight": {
                     "fields": {
                         "title": {},
-                        "title.english": {},
-                        "pages.normalized_text": {},
-                        "pages.normalized_text.english": {},
+                        "pages.normalized_text": {
+                            "fragment_size": 0,
+                            "number_of_fragments": 0
+                        },
                         "all_keywords": {},
                         "pages.keywords": {}
                     },
@@ -289,7 +265,6 @@ class PDFTextExtractor:
             }
 
             res = self.es.search(index=self.index_name, body=search_query)
-
             results = []
             seen_titles = set()
             for hit in res['hits']['hits']:
@@ -312,10 +287,20 @@ class PDFTextExtractor:
                 matched_pages = []
                 if 'inner_hits' in hit and 'pages' in hit['inner_hits']:
                     for inner_hit in hit['inner_hits']['pages']['hits']['hits']:
+                        page_highlights = inner_hit.get("highlight", {})
+                        exact_match_counts = {}
+                        for term in matched_terms["exact"]:
+                            count = 0
+                            for highlights in page_highlights.values():
+                                for hl in highlights:
+                                    count += len(re.findall(rf'<em>{re.escape(term)}</em>', hl))
+                            if count > 0:
+                                exact_match_counts[term] = count
+
                         matched_pages.append({
                             "page_number": int(inner_hit["_source"]["page_number"]),
-                            "original_text": inner_hit["_source"]["original_text"],  # เพิ่ม original_text
-                            "highlight": {k: [str(v) for v in val] for k, val in inner_hit.get("highlight", {}).items()}
+                            "highlight": {k: [str(v) for v in val] for k, val in page_highlights.items()},
+                            "exact_match_counts": exact_match_counts
                         })
 
                 results.append({
@@ -328,7 +313,7 @@ class PDFTextExtractor:
                         "fuzzy": list(matched_terms["fuzzy"])
                     },
                     "highlight": hit.get('highlight', {}),
-                    "all_keywords": hit["_source"].get("all_keywords", [])[:20],
+                    "all_keywords": hit["_source"].get("all_keywords", []),
                     "matched_pages": matched_pages
                 })
 
@@ -340,6 +325,7 @@ class PDFTextExtractor:
                     print(f"Score: {r['score']}")
                     print(f"Exact Matches: {r['matched_terms']['exact']}")
                     print(f"Fuzzy Matches: {r['matched_terms']['fuzzy']}")
+                    print(f"Matched Pages: {[p['page_number'] for p in r['matched_pages']]}")
             else:
                 print(f"No results for: {query}")
 
